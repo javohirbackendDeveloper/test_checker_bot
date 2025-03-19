@@ -31,9 +31,7 @@ bot.start(async (btx) => {
         `Salom ${chat.first_name}, nima yordam bera olaman?`,
         Markup.inlineKeyboard([
           [Markup.button.callback("Test yaratish", "test_button")],
-        ]),
-        Markup.inlineKeyboard([
-          [Markup.button.callback("O'quvchilarni natijalari", "watch_results")],
+          [Markup.button.callback("Natijalarni ko'rish", "watch_results")],
         ])
       );
     } else {
@@ -56,7 +54,7 @@ bot.start(async (btx) => {
       const user = await userSchema.findOne({ id: chat.id });
       tests.forEach(async (test) => {
         bot.action(`test_${test.test_number}`, async (btx) => {
-          if (!test.resolved_users.includes(user._id)) {
+          if (!test.resolved_users.find((item) => item._id === user._id)) {
             const question = await testSchema.findOne({ _id: test._id });
             const user = await userSchema.findOne({ id: chat.id });
             user.selected_test = question._id;
@@ -74,12 +72,27 @@ bot.start(async (btx) => {
       bot.on("text", async (btx) => {
         const text = btx.message.text;
         const user = await userSchema.findOne({ id: btx.chat.id });
+
+        if (!user) {
+          return btx.reply("Foydalanuvchi topilmadi.");
+        }
+
         const selectedTest = await testSchema.findOne({
-          _id: user.selected_test,
+          _id: user?.selected_test,
         });
+
+        if (!selectedTest) {
+          return btx.reply("Test topilmadi.");
+        }
+
+        if (!selectedTest.answers) {
+          return btx.reply("Testda javoblar mavjud emas.");
+        }
+
         const splitedAnswers = text.split(",");
         const answerOfTest = selectedTest.answers.split(",");
         let overall = 0;
+
         for (let i = 0; i < answerOfTest.length; i++) {
           if (
             splitedAnswers[i] &&
@@ -89,35 +102,31 @@ bot.start(async (btx) => {
           }
         }
 
-        if (overall >= answerOfTest.length / 1.5) {
+        if (overall >= answerOfTest.length / 2) {
           user.resolved_tests.push(selectedTest._id);
           await user.save();
-          selectedTest.resolved_users.push(user._id);
-          await selectedTest.save();
+
           if (selectedTest.resolved_users.length <= 3) {
             user.grades = overall * 2.5;
-            await user.save();
           } else if (selectedTest.resolved_users.length <= 7) {
             user.grades = overall * 1.7;
-            await user.save();
           } else if (selectedTest.resolved_users.length <= 10) {
             user.grades = overall * 0.8;
-            await user.save();
           }
+          await user.save();
+
+          selectedTest.resolved_users.push(user);
+          await selectedTest.save();
+
           btx.reply(
-            "Sizning javoblaringiz adminga jo'natildi birozdan so'ng o'zi aloqaga chiqadi, sizning natijangiz" +
-              overall +
-              "/" +
-              answerOfTest.length
+            `Sizning javoblaringiz adminga jo'natildi. Birozdan so'ng aloqaga chiqadi. Sizning natijangiz: ${overall}/${answerOfTest.length}`
           );
         } else {
           btx.reply(
-            "Siz bu testdan o'ta olmadingiz xohlasangiz qaytadan topshiring. Sizning umumiy topgan javoblaringiz: " +
-              overall +
-              "/" +
-              answerOfTest.length
+            `Siz bu testdan o'ta olmadingiz. Xohlasangiz qaytadan topshiring. Sizning umumiy topgan javoblaringiz: ${overall}/${answerOfTest.length}`
           );
         }
+
         user.selected_test = "";
         await user.save();
       });
@@ -210,8 +219,50 @@ bot.action("test_button", (btx) => {
   });
 });
 
-// SHU JOYDA BARCHA OQUVCHILARNI ISMI CHIQADI VA ULARNI BOSGANDA BARCHA ISHLAGAN TESTLARI CHIQADI MASALAN 1 SAVOLGA 10 TA SAVOLDAN 5 TASINI TOPDI VA 20 BALL OLDI VA BALLARNI YOZGANDA ARRAY ICHIDA OBJECT SHAKLIDA QANCHA SAVOLGA JAVOB TOPGANI VA NECHA BALL OLGANI QILIB OZGARTIRILADI
-bot.action("watch_results", (btx) => {});
+bot.action("watch_results", async (btx) => {
+  const tests = await testSchema.find();
+
+  if (tests.length === 0) {
+    return btx.reply("Hozircha hech qanday test mavjud emas.");
+  }
+
+  const buttons = tests.map((test) => [
+    Markup.button.callback(` ${test.test_number}`, `show_test_${test._id}`),
+  ]);
+
+  // Inline buttonlarni yuborish
+  btx.reply("Mana barcha testlar", Markup.inlineKeyboard(buttons));
+});
+
+bot.action(/show_test_(.+)/, async (btx) => {
+  const testId = btx.match[1];
+  const test = await testSchema.findById(testId);
+
+  if (!test) {
+    return btx.reply("Test topilmadi.");
+  }
+
+  const resolvedUsers = test.resolved_users;
+
+  if (resolvedUsers.length === 0) {
+    return btx.reply(
+      `Test ${test.test_number} hali hech kim tomonidan yechilmagan.`
+    );
+  }
+
+  const usersList = resolvedUsers
+    .map((user) => {
+      console.log(user);
+
+      return `Ism: ${user.first_name}, Ball: ${user.grades}`;
+    })
+    .join("\n");
+
+  btx.reply(
+    `Test ${test.test_number} natijalari:\n` +
+      `Yechgan foydalanuvchilar:\n${usersList}`
+  );
+});
 bot.launch();
 
 const PORT = process.env.PORT || 3000;
